@@ -14,6 +14,7 @@ Features
 * Alpha Slider (disabled by default)
 * Old & New Color
 * Color Preview in Preferences List
+* Enable/disable color picker (saves an additional value)
 
 Requirements
 ============
@@ -33,6 +34,8 @@ You can see some tests inside
         android:summary="@string/color1_summary"
         android:defaultValue="@integer/COLOR_BLACK"     <!-- HEX value also accepted (v1.1) -->
         alphaSlider="true"                              <!-- enable alpha slider via XML -->
+        showCheckbox="true"                             <!-- give users the possibility to disable the color... -->
+        enabledByDefault="true"                         <!-- ...but define that it is enabled by default -->
     />
 
 To enable Alpha Slider in your code use function:

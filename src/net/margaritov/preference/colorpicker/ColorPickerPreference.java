@@ -17,6 +17,7 @@
 package net.margaritov.preference.colorpicker;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
 import android.graphics.Color;
@@ -27,6 +28,8 @@ import android.preference.Preference;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 
@@ -39,10 +42,13 @@ public class ColorPickerPreference
 		Preference
 	implements
 		Preference.OnPreferenceClickListener,
-		ColorPickerDialog.OnColorChangedListener {
+		ColorPickerDialog.OnColorChangedListener,
+		CompoundButton.OnCheckedChangeListener {
 
 	View mView;
 	ColorPickerDialog mDialog;
+	boolean mShowCheckbox = false;
+	boolean mPickerEnabled = false;
 	int mDefaultValue = Color.BLACK;
 	private int mValue = Color.BLACK;
 	private float mDensity = 0;
@@ -67,7 +73,10 @@ public class ColorPickerPreference
 	
 	@Override
 	protected void onSetInitialValue(boolean restoreValue, Object defaultValue) {
-		onColorChanged(restoreValue ? getValue() : (Integer) defaultValue);
+		if (restoreValue)
+			mPickerEnabled = !mShowCheckbox || getSharedPreferences().getBoolean(getKey() + "_enabled", mPickerEnabled);
+
+		onColorChanged(restoreValue ? getValue() : mDefaultValue);
 	}
 
 	private void init(Context context, AttributeSet attrs) {
@@ -75,7 +84,9 @@ public class ColorPickerPreference
 		setOnPreferenceClickListener(this);
 		if (attrs != null) {
 			String defaultValue = attrs.getAttributeValue(androidns, "defaultValue");
-			if (defaultValue.startsWith("#")) {
+			if (defaultValue == null || defaultValue.isEmpty()) {
+				mDefaultValue = Color.BLACK;
+			} else if (defaultValue.startsWith("#")) {
 				try {
 					mDefaultValue = convertToColorInt(defaultValue);
 				} catch (NumberFormatException e) {
@@ -89,6 +100,8 @@ public class ColorPickerPreference
 				}
 			}
 			mAlphaSliderEnabled = attrs.getAttributeBooleanValue(null, "alphaSlider", false);
+			mShowCheckbox = attrs.getAttributeBooleanValue(null, "showCheckbox", false);
+			mPickerEnabled = !mShowCheckbox || attrs.getAttributeBooleanValue(null, "enabledByDefault", false);
 		}
 		mValue = mDefaultValue;
 	}
@@ -97,11 +110,22 @@ public class ColorPickerPreference
 	protected void onBindView(View view) {
 		super.onBindView(view);
 		mView = view;
+		persistBothValues();
 		setPreviewColor();
 	}
 
 	private void setPreviewColor() {
 		if (mView == null) return;
+		
+		CheckBox cbPickerEnabled = null;
+		if (mShowCheckbox) {
+			cbPickerEnabled = new CheckBox(getContext());
+			cbPickerEnabled.setFocusable(false);
+			cbPickerEnabled.setEnabled(super.isEnabled());
+			cbPickerEnabled.setChecked(mPickerEnabled);
+			cbPickerEnabled.setOnCheckedChangeListener(this);
+		}
+		
 		ImageView iView = new ImageView(getContext());
 		LinearLayout widgetFrameView = ((LinearLayout)mView.findViewById(android.R.id.widget_frame));
 		if (widgetFrameView == null) return;
@@ -116,6 +140,10 @@ public class ColorPickerPreference
 		int count = widgetFrameView.getChildCount();
 		if (count > 0) {
 			widgetFrameView.removeViews(0, count);
+		}
+		if (mShowCheckbox) {
+			widgetFrameView.setOrientation(LinearLayout.HORIZONTAL);
+			widgetFrameView.addView(cbPickerEnabled);
 		}
 		widgetFrameView.addView(iView);
 		widgetFrameView.setMinimumWidth(0);
@@ -145,7 +173,7 @@ public class ColorPickerPreference
 
 	public int getValue() {
 		try {
-			if (isPersistent()) {
+			if (shouldPersist()) {
 				mValue = getPersistedInt(mDefaultValue);
 			}
 		} catch (ClassCastException e) {
@@ -157,17 +185,41 @@ public class ColorPickerPreference
 
 	@Override
 	public void onColorChanged(int color) {
-		if (isPersistent()) {
-			persistInt(color);
-		}
 		mValue = color;
+		persistBothValues();
 		setPreviewColor();
-		try {
-			getOnPreferenceChangeListener().onPreferenceChange(this, color);
-		} catch (NullPointerException e) {
-
-		}
+		notifyChanged();
 	}
+	
+
+	@Override
+	public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+		mPickerEnabled = isChecked; 
+		persistBothValues();
+        notifyDependencyChange(shouldDisableDependents());
+        notifyChanged();
+	}
+	
+    protected void persistBothValues() {
+    	if (shouldPersist()) {
+            SharedPreferences.Editor editor = getEditor();
+            editor.putInt(getKey(), mValue);
+            if (mShowCheckbox)
+            	editor.putBoolean(getKey() + "_enabled", mPickerEnabled);
+            if (shouldCommit()) {
+                try {
+                    editor.apply();
+                } catch (AbstractMethodError unused) {
+                    editor.commit();
+                }
+            }
+		}
+    }
+    
+    @Override
+    public boolean isEnabled() {
+    	return super.isEnabled() && mPickerEnabled;
+    }
 
 	public boolean onPreferenceClick(Preference preference) {
 		showDialog(null);
@@ -257,12 +309,10 @@ public class ColorPickerPreference
     @Override
     protected Parcelable onSaveInstanceState() {
         final Parcelable superState = super.onSaveInstanceState();
-        if (mDialog == null || !mDialog.isShowing()) {
-            return superState;
-        }
-
         final SavedState myState = new SavedState(superState);
-        myState.dialogBundle = mDialog.onSaveInstanceState();
+        if (mDialog != null && mDialog.isShowing())
+        	myState.dialogBundle = mDialog.onSaveInstanceState();
+        myState.pickerEnabled = mPickerEnabled;
         return myState;
     }
 
@@ -276,21 +326,26 @@ public class ColorPickerPreference
 
         SavedState myState = (SavedState) state;
         super.onRestoreInstanceState(myState.getSuperState());
-        showDialog(myState.dialogBundle);
+        mPickerEnabled = myState.pickerEnabled;
+        if (myState.dialogBundle != null)
+        	showDialog(myState.dialogBundle);
     }
 
     private static class SavedState extends BaseSavedState {
         Bundle dialogBundle;
+        boolean pickerEnabled;
         
         public SavedState(Parcel source) {
             super(source);
             dialogBundle = source.readBundle();
+            pickerEnabled = source.readInt() == 1;
         }
 
         @Override
         public void writeToParcel(Parcel dest, int flags) {
             super.writeToParcel(dest, flags);
             dest.writeBundle(dialogBundle);
+            dest.writeInt(pickerEnabled ? 1 : 0);
         }
 
         public SavedState(Parcelable superState) {
